@@ -1,4 +1,5 @@
 #include <mysql2_ext.h>
+#include "mask_sigalrm.h"
 
 extern VALUE mMysql2, cMysql2Error;
 static VALUE cMysql2Statement, cBigDecimal, cDateTime, cDate;
@@ -81,8 +82,13 @@ struct nogvl_prepare_statement_args {
 
 static void *nogvl_prepare_statement(void *ptr) {
   struct nogvl_prepare_statement_args *args = ptr;
+  int rv;
 
-  if (mysql_stmt_prepare(args->stmt, args->sql_ptr, args->sql_len)) {
+  MASK_SIGALRM
+  rv = mysql_stmt_prepare(args->stmt, args->sql_ptr, args->sql_len);
+  UNMASK_SIGALRM
+
+  if (rv) {
     return (void*)Qfalse;
   } else {
     return (void*)Qtrue;
