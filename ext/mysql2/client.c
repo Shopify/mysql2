@@ -13,6 +13,7 @@
 #include "wait_for_single_fd.h"
 
 #include "mysql_enc_name_to_ruby.h"
+#include "mask_sigalrm.h"
 
 VALUE cMysql2Client;
 extern VALUE mMysql2, cMysql2Error, cMysql2TimeoutError;
@@ -216,10 +217,12 @@ static void *nogvl_connect(void *ptr) {
   struct nogvl_connect_args *args = ptr;
   MYSQL *client;
 
+  MASK_SIGALRM
   client = mysql_real_connect(args->mysql, args->host,
                               args->user, args->passwd,
                               args->db, args->port, args->unix_socket,
                               args->client_flag);
+  UNMASK_SIGALRM
 
   return (void *)(client ? Qtrue : Qfalse);
 }
@@ -520,7 +523,9 @@ static void *nogvl_send_query(void *ptr) {
   struct nogvl_send_query_args *args = ptr;
   int rv;
 
+  MASK_SIGALRM
   rv = mysql_send_query(args->mysql, args->sql_ptr, args->sql_len);
+  UNMASK_SIGALRM
 
   return (void*)(rv == 0 ? Qtrue : Qfalse);
 }
