@@ -167,8 +167,13 @@ static VALUE rb_mysql_stmt_field_count(VALUE self) {
 
 static void *nogvl_stmt_execute(void *ptr) {
   MYSQL_STMT *stmt = ptr;
+  int rv;
 
-  if (mysql_stmt_execute(stmt)) {
+  MASK_SIGALRM
+  rv = mysql_stmt_execute(stmt);
+  UNMASK_SIGALRM
+
+  if (rv) {
     return (void*)Qfalse;
   } else {
     return (void*)Qtrue;
