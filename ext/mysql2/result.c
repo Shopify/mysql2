@@ -1,6 +1,7 @@
 #include <mysql2_ext.h>
 
 #include "mysql_enc_to_ruby.h"
+#include "mask_sigalrm.h"
 
 static rb_encoding *binaryEncoding;
 
@@ -125,12 +126,19 @@ static VALUE rb_mysql_result_free_(VALUE self) {
 static void *nogvl_fetch_row(void *ptr) {
   MYSQL_RES *result = ptr;
 
-  return mysql_fetch_row(result);
+  MASK_SIGALRM
+  uintptr_t r = mysql_fetch_row(result);
+  UNMASK_SIGALRM
+
+  return (void *)r;
 }
 
 static void *nogvl_stmt_fetch(void *ptr) {
   MYSQL_STMT *stmt = ptr;
+
+  MASK_SIGALRM
   uintptr_t r = mysql_stmt_fetch(stmt);
+  UNMASK_SIGALRM
 
   return (void *)r;
 }
