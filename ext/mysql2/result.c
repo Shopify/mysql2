@@ -3,6 +3,8 @@
 #include "mysql_enc_to_ruby.h"
 #define MYSQL2_CHARSETNR_SIZE (sizeof(mysql2_mysql_enc_to_rb)/sizeof(mysql2_mysql_enc_to_rb[0]))
 
+#include "mask_sigalrm.h"
+
 static rb_encoding *binaryEncoding;
 
 /* on 64bit platforms we can handle dates way outside 2038-01-19T03:14:07
@@ -127,12 +129,19 @@ static VALUE rb_mysql_result_free_(VALUE self) {
 static void *nogvl_fetch_row(void *ptr) {
   MYSQL_RES *result = ptr;
 
-  return mysql_fetch_row(result);
+  MASK_SIGALRM
+  uintptr_t r = mysql_fetch_row(result);
+  UNMASK_SIGALRM
+
+  return (void *)r;
 }
 
 static void *nogvl_stmt_fetch(void *ptr) {
   MYSQL_STMT *stmt = ptr;
+
+  MASK_SIGALRM
   uintptr_t r = mysql_stmt_fetch(stmt);
+  UNMASK_SIGALRM
 
   return (void *)r;
 }
@@ -182,7 +191,7 @@ static VALUE mysql2_set_field_string_encoding(VALUE val, MYSQL_FIELD field, rb_e
     int enc_index;
 
     enc_name = (field.charsetnr-1 < MYSQL2_CHARSETNR_SIZE) ? mysql2_mysql_enc_to_rb[field.charsetnr-1] : NULL;
-    
+
     if (enc_name != NULL) {
       /* use the field encoding we were able to match */
       enc_index = rb_enc_find_index(enc_name);

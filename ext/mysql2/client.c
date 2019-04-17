@@ -532,7 +532,9 @@ static VALUE do_send_query(void *args) {
  */
 static void *nogvl_read_query_result(void *ptr) {
   MYSQL * client = ptr;
+  MASK_SIGALRM
   my_bool res = mysql_read_query_result(client);
+  UNMASK_SIGALRM
 
   return (void *)(res == 0 ? Qtrue : Qfalse);
 }
@@ -541,11 +543,13 @@ static void *nogvl_do_result(void *ptr, char use_result) {
   mysql_client_wrapper *wrapper = ptr;
   MYSQL_RES *result;
 
+  MASK_SIGALRM
   if (use_result) {
     result = mysql_use_result(wrapper->client);
   } else {
     result = mysql_store_result(wrapper->client);
   }
+  UNMASK_SIGALRM
 
   /* once our result is stored off, this connection is
      ready for another command to be issued */
