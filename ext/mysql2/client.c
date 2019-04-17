@@ -1150,7 +1150,9 @@ static VALUE rb_mysql_client_next_result(VALUE self)
 {
     int ret;
     GET_CLIENT(self);
+    MASK_SIGALRM
     ret = mysql_next_result(wrapper->client);
+    UNMASK_SIGALRM
     if (ret > 0) {
       rb_raise_mysql2_error(wrapper);
       return Qfalse;
