@@ -468,10 +468,12 @@ static VALUE rb_mysql_stmt_execute(int argc, VALUE *argv, VALUE self) {
 
   if (!is_streaming) {
     // recieve the whole result set from the server
+    MASK_SIGALRM
     if (mysql_stmt_store_result(stmt)) {
       mysql_free_result(metadata);
       rb_raise_mysql2_stmt_error(stmt_wrapper);
     }
+    UNMASK_SIGALRM
     wrapper->active_thread = Qnil;
   }
 
