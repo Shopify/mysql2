@@ -25,9 +25,8 @@ static ID intern_brackets, intern_merge, intern_merge_bang, intern_new_with_args
     rb_raise(cMysql2Error, "MySQL client is not initialized"); \
   }
 
-#if defined(HAVE_VIO_IS_CONNECTED)
- my_bool vio_is_connected(Vio *vio);
- #define VIO_IS_CONNECTED(wrapper) vio_is_connected(wrapper->client->net.vio)
+#if defined(HAVE_MYSQLCLIENT_20)
+ #define VIO_IS_CONNECTED(wrapper) (wrapper->client->net.vio + 0x1c8)(wrapper->client->net.vio)
 #else
  #define VIO_IS_CONNECTED(wrapper) 1
 #endif
@@ -966,7 +965,7 @@ static VALUE _mysql_client_options(VALUE self, int opt, VALUE value) {
  */
 static VALUE rb_mysql_client_info(RB_MYSQL_UNUSED VALUE klass) {
   VALUE version_info, version, header_version;
-#if defined(HAVE_VIO_IS_CONNECTED)
+#if defined(HAVE_MYSQL_CLIENT_20)
   VALUE has_vio_is_connected = Qtrue;
 #else
   VALUE has_vio_is_connected = Qfalse;

@@ -11,14 +11,20 @@ void Init_mysql2(void);
 
 #ifdef HAVE_MYSQL_H
 #include <mysql.h>
+#include <mysql_version.h>
 #include <errmsg.h>
 #else
 #include <mysql/mysql.h>
+#include <mysql/mysql_version.h>
 #include <mysql/errmsg.h>
 #endif
 
 #include <ruby/encoding.h>
 #include <ruby/thread.h>
+
+#if (LIBMYSQL_VERSION_ID >= 50700) && (LIBMYSQL_VERSION_ID < 50800)
+#define HAVE_MYSQL_CLIENT_20
+#endif
 
 #if defined(__GNUC__) && (__GNUC__ >= 3)
 #define RB_MYSQL_NORETURN __attribute__ ((noreturn))
