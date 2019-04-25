@@ -26,7 +26,7 @@ static ID intern_brackets, intern_merge, intern_merge_bang, intern_new_with_args
   }
 
 #if defined(HAVE_MYSQLCLIENT_20)
- #define VIO_IS_CONNECTED(wrapper) (wrapper->client->net.vio + 0x1c8)(wrapper->client->net.vio)
+ #define VIO_IS_CONNECTED(wrapper) (((wrapper)->client->net.vio + 0x1c8)((wrapper)->client->net.vio))
 #else
  #define VIO_IS_CONNECTED(wrapper) 1
 #endif
