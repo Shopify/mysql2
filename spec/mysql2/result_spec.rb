@@ -5,6 +5,35 @@ RSpec.describe Mysql2::Result do
     @result = @client.query "SELECT 1"
   end
 
+  it "timeout overflow buffer timeout edgecase" do
+    client = Mysql2::Client.new(
+      host: 'storefront-renderer.railgun',
+      port: 20001,
+      username: 'root',
+      database: 'test',
+      connect_timeout: 1,
+      read_timeout: 1,
+      write_timeout: 1,
+    )
+
+		client.query("CREATE TABLE IF NOT EXISTS test_table (c1 MEDIUMTEXT, c2 MEDIUMTEXT)")
+
+		s = StringIO.new
+		1500.times { s << "sdjsdjsdjssadaskdhasfhasjdhaskdjhasdjkhsadjkh" }
+		3000.times do
+			client.query("INSERT INTO test_table (c1, c2) VALUES ('#{s.string}', '#{s.string}')")
+		end
+
+		start_time = Time.now
+		client.query("SELECT * from test_table")
+		query_time = Time.now - start_time
+
+    expect(query_time).to be <= 1.0
+	ensure
+		client.query("DROP TABLE IF EXISTS test_table")
+  end
+
+
   it "should raise a TypeError exception when it doesn't wrap a result set" do
     r = Mysql2::Result.new
     expect { r.count }.to raise_error(TypeError)
