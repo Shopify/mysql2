@@ -19,8 +19,9 @@ VALUE cMysql2Client;
 extern VALUE mMysql2, cMysql2Error, cMysql2TimeoutError;
 static VALUE sym_id, sym_version, sym_header_version, sym_async, sym_symbolize_keys, sym_as, sym_array, sym_stream;
 static VALUE sym_no_good_index_used, sym_no_index_used, sym_query_was_slow;
+static VALUE sym_send_query_callback, sym_send_query_complete_callback, sym_socket_wait_readable_callback, sym_socket_readable_callback, sym_read_query_result_callback, sym_read_query_result_complete_callback;
 static ID intern_brackets, intern_merge, intern_merge_bang, intern_new_with_args,
-  intern_current_query_options, intern_read_timeout;
+  intern_current_query_options, intern_read_timeout, intern_call;
 
 #define REQUIRE_INITIALIZED(wrapper) \
   if (!wrapper->initialized) { \
@@ -567,6 +568,14 @@ static void *nogvl_use_result(void *ptr) {
   return nogvl_do_result(ptr, 1);
 }
 
+static void invoke_callback(VALUE current_query_options, VALUE callback_name_sym) {
+  Check_Type(current_query_options, T_HASH);
+  VALUE callback_proc = rb_hash_aref(current_query_options, callback_name_sym);
+  if (rb_obj_is_proc(callback_proc)) {
+    rb_funcall(callback_proc, intern_call, 0);
+  }
+}
+
 /* call-seq:
  *    client.async_result
  *
@@ -577,19 +586,23 @@ static VALUE rb_mysql_client_async_result(VALUE self) {
   VALUE resultObj;
   VALUE current, is_streaming;
   GET_CLIENT(self);
+  current = rb_iv_get(self, "@current_query_options");
 
   /* if we're not waiting on a result, do nothing */
   if (NIL_P(wrapper->active_thread))
     return Qnil;
 
   REQUIRE_CONNECTED(wrapper);
+  invoke_callback(current, sym_read_query_result_callback);
   if ((VALUE)rb_thread_call_without_gvl(nogvl_read_query_result, wrapper->client, RUBY_UBF_IO, 0) == Qfalse) {
     /* an error occurred, mark this connection inactive */
+    invoke_callback(current, sym_read_query_result_complete_callback);
     wrapper->active_thread = Qnil;
     rb_raise_mysql2_error(wrapper);
   }
+  invoke_callback(current, sym_read_query_result_complete_callback);
 
-  is_streaming = rb_hash_aref(rb_ivar_get(self, intern_current_query_options), sym_stream);
+  is_streaming = rb_hash_aref(current, sym_stream);
   if (is_streaming == Qtrue) {
     result = (MYSQL_RES *)rb_thread_call_without_gvl(nogvl_use_result, wrapper, RUBY_UBF_IO, 0);
   } else {
@@ -606,7 +619,7 @@ static VALUE rb_mysql_client_async_result(VALUE self) {
   }
 
   // Duplicate the options hash and put the copy in the Result object
-  current = rb_hash_dup(rb_ivar_get(self, intern_current_query_options));
+  current = rb_hash_dup(current);
   (void)RB_GC_GUARD(current);
   Check_Type(current, T_HASH);
   resultObj = rb_mysql_result_to_obj(self, wrapper->encoding, current, result, Qnil);
@@ -647,8 +660,9 @@ static VALUE do_query(void *args) {
   struct timeval *tvp;
   long int sec;
   int retval;
-  VALUE read_timeout;
+  VALUE read_timeout, current;
 
+  current = rb_iv_get(async_args->self, "@current_query_options");
   read_timeout = rb_ivar_get(async_args->self, intern_read_timeout);
 
   tvp = NULL;
@@ -666,20 +680,16 @@ static VALUE do_query(void *args) {
     tvp->tv_usec = 0;
   }
 
-  for(;;) {
-    retval = rb_wait_for_single_fd(async_args->fd, RB_WAITFD_IN, tvp);
+  invoke_callback(current, sym_socket_wait_readable_callback);
+  retval = rb_wait_for_single_fd(async_args->fd, RB_WAITFD_IN, tvp);
+  invoke_callback(current, sym_socket_readable_callback);
 
-    if (retval == 0) {
+  if (retval == 0) {
       rb_raise(cMysql2TimeoutError, "Timeout waiting for a response from the last query. (waited %d seconds)", FIX2INT(read_timeout));
-    }
+  }
 
-    if (retval < 0) {
+  if (retval < 0) {
       rb_sys_fail(0);
-    }
-
-    if (retval > 0) {
-      break;
-    }
   }
 
   return Qnil;
@@ -788,8 +798,10 @@ static VALUE rb_mysql_query(VALUE self, VALUE sql, VALUE current) {
 
   rb_mysql_client_set_active_thread(self);
 
+  invoke_callback(current, sym_send_query_callback);
 #ifndef _WIN32
   rb_rescue2(do_send_query, (VALUE)&args, disconnect_and_raise, self, rb_eException, (VALUE)0);
+  invoke_callback(current, sym_send_query_complete_callback);
 
   if (rb_hash_aref(current, sym_async) == Qtrue) {
     return Qnil;
@@ -803,6 +815,7 @@ static VALUE rb_mysql_query(VALUE self, VALUE sql, VALUE current) {
   }
 #else
   do_send_query(&args);
+  invoke_callback(current, sym_send_query_complete_callback);
 
   /* this will just block until the result is ready */
   return rb_ensure(rb_mysql_client_async_result, self, disconnect_and_mark_inactive, self);
@@ -1475,6 +1488,13 @@ void init_mysql2_client() {
   sym_array           = ID2SYM(rb_intern("array"));
   sym_stream          = ID2SYM(rb_intern("stream"));
 
+  sym_send_query_callback = ID2SYM(rb_intern("send_query_callback"));
+  sym_send_query_complete_callback = ID2SYM(rb_intern("send_query_complete_callback"));
+  sym_socket_wait_readable_callback = ID2SYM(rb_intern("socket_wait_readable_callback"));
+  sym_socket_readable_callback = ID2SYM(rb_intern("socket_readable_callback"));
+  sym_read_query_result_callback = ID2SYM(rb_intern("read_query_result_callback"));
+  sym_read_query_result_complete_callback = ID2SYM(rb_intern("read_query_result_complete_callback"));
+
   sym_no_good_index_used = ID2SYM(rb_intern("no_good_index_used"));
   sym_no_index_used      = ID2SYM(rb_intern("no_index_used"));
   sym_query_was_slow     = ID2SYM(rb_intern("query_was_slow"));
@@ -1485,6 +1505,7 @@ void init_mysql2_client() {
   intern_new_with_args = rb_intern("new_with_args");
   intern_current_query_options = rb_intern("@current_query_options");
   intern_read_timeout = rb_intern("@read_timeout");
+  intern_call = rb_intern("call");
 
 #ifdef CLIENT_LONG_PASSWORD
   rb_const_set(cMysql2Client, rb_intern("LONG_PASSWORD"),
