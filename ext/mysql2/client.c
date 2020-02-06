@@ -90,9 +90,16 @@ struct nogvl_connect_args {
  */
 struct nogvl_send_query_args {
   MYSQL *mysql;
-  VALUE sql;
   const char *sql_ptr;
   long sql_len;
+};
+
+/*
+ * used to pass all arguments to nogvl_send_query before exiting the GVL
+ */
+struct do_send_query_args {
+  struct nogvl_send_query_args nogvl_args;
+  VALUE sql, current_query_options;
   mysql_client_wrapper *wrapper;
 };
 
@@ -104,6 +111,14 @@ struct nogvl_select_db_args {
   MYSQL *mysql;
   char *db;
 };
+
+static void invoke_callback(VALUE current_query_options, VALUE callback_name_sym) {
+  Check_Type(current_query_options, T_HASH);
+  VALUE callback_proc = rb_hash_aref(current_query_options, callback_name_sym);
+  if (rb_obj_is_proc(callback_proc)) {
+    rb_funcall(callback_proc, intern_call, 0);
+  }
+}
 
 static VALUE rb_set_ssl_mode_option(VALUE self, VALUE setting) {
   unsigned long version = mysql_get_client_version();
@@ -516,13 +531,17 @@ static void *nogvl_send_query(void *ptr) {
 }
 
 static VALUE do_send_query(void *args) {
-  struct nogvl_send_query_args *query_args = args;
-  mysql_client_wrapper *wrapper = query_args->wrapper;
-  if ((VALUE)rb_thread_call_without_gvl(nogvl_send_query, args, RUBY_UBF_IO, 0) == Qfalse) {
+  struct do_send_query_args *do_args = args;
+  mysql_client_wrapper *wrapper = do_args->wrapper;
+
+  invoke_callback(do_args->current_query_options, sym_send_query_callback);
+  if ((VALUE)rb_thread_call_without_gvl(nogvl_send_query, &do_args->nogvl_args, RUBY_UBF_IO, 0) == Qfalse) {
     /* an error occurred, we're not active anymore */
     wrapper->active_thread = Qnil;
+    invoke_callback(do_args->current_query_options, sym_send_query_complete_callback);
     rb_raise_mysql2_error(wrapper);
   }
+  invoke_callback(do_args->current_query_options, sym_send_query_complete_callback);
   return Qnil;
 }
 
@@ -568,14 +587,6 @@ static void *nogvl_use_result(void *ptr) {
   return nogvl_do_result(ptr, 1);
 }
 
-static void invoke_callback(VALUE current_query_options, VALUE callback_name_sym) {
-  Check_Type(current_query_options, T_HASH);
-  VALUE callback_proc = rb_hash_aref(current_query_options, callback_name_sym);
-  if (rb_obj_is_proc(callback_proc)) {
-    rb_funcall(callback_proc, intern_call, 0);
-  }
-}
-
 /* call-seq:
  *    client.async_result
  *
@@ -596,8 +607,8 @@ static VALUE rb_mysql_client_async_result(VALUE self) {
   invoke_callback(current, sym_read_query_result_callback);
   if ((VALUE)rb_thread_call_without_gvl(nogvl_read_query_result, wrapper->client, RUBY_UBF_IO, 0) == Qfalse) {
     /* an error occurred, mark this connection inactive */
-    invoke_callback(current, sym_read_query_result_complete_callback);
     wrapper->active_thread = Qnil;
+    invoke_callback(current, sym_read_query_result_complete_callback);
     rb_raise_mysql2_error(wrapper);
   }
   invoke_callback(current, sym_read_query_result_complete_callback);
@@ -779,11 +790,11 @@ static VALUE rb_mysql_query(VALUE self, VALUE sql, VALUE current) {
 #ifndef _WIN32
   struct async_query_args async_args;
 #endif
-  struct nogvl_send_query_args args;
+  struct do_send_query_args args;
   GET_CLIENT(self);
 
   REQUIRE_CONNECTED(wrapper);
-  args.mysql = wrapper->client;
+  args.nogvl_args.mysql = wrapper->client;
 
   (void)RB_GC_GUARD(current);
   Check_Type(current, T_HASH);
@@ -792,16 +803,15 @@ static VALUE rb_mysql_query(VALUE self, VALUE sql, VALUE current) {
   Check_Type(sql, T_STRING);
   /* ensure the string is in the encoding the connection is expecting */
   args.sql = rb_str_export_to_enc(sql, rb_to_encoding(wrapper->encoding));
-  args.sql_ptr = RSTRING_PTR(args.sql);
-  args.sql_len = RSTRING_LEN(args.sql);
+  args.nogvl_args.sql_ptr = RSTRING_PTR(args.sql);
+  args.nogvl_args.sql_len = RSTRING_LEN(args.sql);
   args.wrapper = wrapper;
+  args.current_query_options = current;
 
   rb_mysql_client_set_active_thread(self);
 
-  invoke_callback(current, sym_send_query_callback);
 #ifndef _WIN32
   rb_rescue2(do_send_query, (VALUE)&args, disconnect_and_raise, self, rb_eException, (VALUE)0);
-  invoke_callback(current, sym_send_query_complete_callback);
 
   if (rb_hash_aref(current, sym_async) == Qtrue) {
     return Qnil;
@@ -815,7 +825,6 @@ static VALUE rb_mysql_query(VALUE self, VALUE sql, VALUE current) {
   }
 #else
   do_send_query(&args);
-  invoke_callback(current, sym_send_query_complete_callback);
 
   /* this will just block until the result is ready */
   return rb_ensure(rb_mysql_client_async_result, self, disconnect_and_mark_inactive, self);
