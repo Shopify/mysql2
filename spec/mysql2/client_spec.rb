@@ -1158,4 +1158,29 @@ RSpec.describe Mysql2::Client do # rubocop:disable Metrics/BlockLength
   it "should respond to #encoding" do
     expect(@client).to respond_to(:encoding)
   end
+
+  describe "#change_user" do
+    it "raises when given invalid credentials" do
+      options = DatabaseCredentials["root"].dup
+      client = new_client(options)
+
+      expect do
+        client.change_user("notareal", "user", "fakedb")
+      end.to raise_error Mysql2::Error::ConnectionError, /Access denied for user/
+    end
+
+    it "works for a real user" do
+      options = DatabaseCredentials["root"].dup
+      client = new_client(options)
+      alt_user = DatabaseCredentials["user"]
+
+      skip "not alternate user to test with" unless alt_user
+
+      auth_result = client.change_user(alt_user["username"], alt_user["password"], alt_user["database"])
+      query_result = client.query("SELECT DATABASE() as current_db").first
+
+      expect(auth_result).to be true
+      expect(query_result).to eql("current_db" => alt_user["database"])
+    end
+  end
 end

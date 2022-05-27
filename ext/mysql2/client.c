@@ -118,6 +118,17 @@ struct nogvl_select_db_args {
   char *db;
 };
 
+/*
+ * used to pass all arguments to mysql_change_user while inside
+ * rb_thread_call_without_gvl
+ */
+struct nogvl_mysql_change_user_args {
+  MYSQL *mysql;
+  char *user;
+  char *pass;
+  char *database;
+};
+
 static VALUE rb_set_ssl_mode_option(VALUE self, VALUE setting) {
   unsigned long version = mysql_get_client_version();
 
@@ -441,6 +452,31 @@ static int opt_connect_attr_add_i(VALUE key, VALUE value, VALUE arg)
   return ST_CONTINUE;
 }
 #endif
+
+static void* nogvl_mysql_change_user(void *ptr) {
+  struct nogvl_mysql_change_user_args *args = ptr;
+
+  return (void*) mysql_change_user(args->mysql, args->user, args->pass, args->database);
+}
+
+static VALUE rb_mysql_change_user(VALUE self, VALUE rb_user, VALUE rb_pass, VALUE rb_database) {
+  struct nogvl_mysql_change_user_args args;
+
+  GET_CLIENT(self);
+
+  args.mysql = wrapper->client;
+  args.user = NIL_P(rb_user) ? NULL : StringValueCStr(rb_user);
+  args.pass = NIL_P(rb_pass) ? NULL : StringValueCStr(rb_pass);
+  args.database = NIL_P(rb_database) ? NULL : StringValueCStr(rb_database);
+
+  if ((bool) rb_thread_call_without_gvl(nogvl_mysql_change_user, &args, RUBY_UBF_IO, 0) != 0) {
+    rb_raise_mysql2_error(wrapper);
+
+    return Qfalse;
+  }
+  
+  return Qtrue;
+}
 
 static VALUE rb_mysql_connect(VALUE self, VALUE user, VALUE pass, VALUE host, VALUE port, VALUE database, VALUE socket, VALUE flags, VALUE conn_attrs) {
   struct nogvl_connect_args args;
@@ -1500,6 +1536,7 @@ void init_mysql2_client() {
   rb_define_method(cMysql2Client, "ssl_cipher", rb_mysql_get_ssl_cipher, 0);
   rb_define_method(cMysql2Client, "encoding", rb_mysql_client_encoding, 0);
   rb_define_method(cMysql2Client, "session_track", rb_mysql_client_session_track, 1);
+  rb_define_method(cMysql2Client, "change_user", rb_mysql_change_user, 3);
 
   rb_define_private_method(cMysql2Client, "connect_timeout=", set_connect_timeout, 1);
   rb_define_private_method(cMysql2Client, "read_timeout=", set_read_timeout, 1);
